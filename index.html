@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+
+  <title>Jubb Person AR</title>
+
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+
+  <!-- COCO-SSD: ตรวจจับวัตถุ รวมถึง person -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: Arial, Tahoma, sans-serif;
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+      background: #000;
+      overflow: hidden;
+    }
+
+    #camera {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+    }
+
+    #overlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    #status {
+      position: fixed;
+      top: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 50;
+      color: white;
+      background: rgba(0,0,0,.58);
+      backdrop-filter: blur(8px);
+      padding: 10px 16px;
+      border-radius: 18px;
+      font-size: 14px;
+      white-space: nowrap;
+      box-shadow: 0 6px 24px rgba(0,0,0,.25);
+    }
+
+    #startButton {
+      position: fixed;
+      left: 50%;
+      bottom: 34px;
+      transform: translateX(-50%);
+      z-index: 100;
+      border: 0;
+      border-radius: 18px;
+      padding: 15px 28px;
+      min-width: 220px;
+      font-size: 18px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #ff4fc8, #8e5cff);
+      color: white;
+      box-shadow: 0 10px 30px rgba(142,92,255,.42);
+      cursor: pointer;
+    }
+
+    #startButton:active {
+      transform: translateX(-50%) scale(.97);
+    }
+
+    /* กล่องรวม Jubb ทั้ง 5 คำ */
+    #jubbLayer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      display: none;
+      z-index: 20;
+    }
+
+    .jubb {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      font-family: "Arial Rounded MT Bold", "Trebuchet MS", Arial, sans-serif;
+      font-weight: 900;
+      letter-spacing: 1.5px;
+      user-select: none;
+      white-space: nowrap;
+
+      color: #fff;
+      text-shadow:
+        0 0 4px #fff,
+        0 0 10px #ff62cf,
+        0 0 18px #b259ff,
+        0 0 28px #5bdcff;
+
+      filter: drop-shadow(0 5px 8px rgba(0,0,0,.35));
+      animation:
+        floatJubb 2.4s ease-in-out infinite,
+        glowJubb 1.8s ease-in-out infinite alternate;
+    }
+
+    .jubb:nth-child(1) {
+      font-size: clamp(28px, 7vw, 54px);
+      animation-delay: 0s;
+    }
+
+    .jubb:nth-child(2) {
+      font-size: clamp(24px, 6vw, 46px);
+      animation-delay: -.45s;
+    }
+
+    .jubb:nth-child(3) {
+      font-size: clamp(30px, 7.5vw, 58px);
+      animation-delay: -.90s;
+    }
+
+    .jubb:nth-child(4) {
+      font-size: clamp(22px, 5.6vw, 44px);
+      animation-delay: -1.35s;
+    }
+
+    .jubb:nth-child(5) {
+      font-size: clamp(27px, 6.7vw, 52px);
+      animation-delay: -1.80s;
+    }
+
+    @keyframes floatJubb {
+      0%   { margin-top: 0;    margin-left: 0;   rotate: -4deg; }
+      25%  { margin-top: -14px; margin-left: 8px; rotate: 3deg; }
+      50%  { margin-top: 4px;  margin-left: -6px; rotate: 6deg; }
+      75%  { margin-top: -10px; margin-left: 5px; rotate: -2deg; }
+      100% { margin-top: 0;    margin-left: 0;   rotate: -4deg; }
+    }
+
+    @keyframes glowJubb {
+      from {
+        opacity: .78;
+        scale: .94;
+      }
+      to {
+        opacity: 1;
+        scale: 1.08;
+      }
+    }
+
+    /* กรอบคนแบบบาง ๆ */
+    #personBox {
+      position: absolute;
+      border: 2px solid rgba(255,255,255,.65);
+      border-radius: 22px;
+      box-shadow:
+        0 0 10px rgba(255,255,255,.45),
+        0 0 20px rgba(255,79,200,.28);
+      display: none;
+      pointer-events: none;
+      z-index: 10;
+      transition:
+        left .10s linear,
+        top .10s linear,
+        width .10s linear,
+        height .10s linear;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="app">
+
+  <video id="camera" autoplay playsinline muted></video>
+
+  <canvas id="overlay"></canvas>
+
+  <div id="personBox"></div>
+
+  <div id="jubbLayer">
+    <div class="jubb">Jubb</div>
+    <div class="jubb">Jubb</div>
+    <div class="jubb">Jubb</div>
+    <div class="jubb">Jubb</div>
+    <div class="jubb">Jubb</div>
+  </div>
+
+  <div id="status">กดเปิดกล้องเพื่อเริ่ม</div>
+
+  <button id="startButton">เปิดกล้อง</button>
+
+</div>
+
+<script>
+(() => {
+
+  const video = document.getElementById("camera");
+  const overlay = document.getElementById("overlay");
+  const ctx = overlay.getContext("2d");
+
+  const startButton = document.getElementById("startButton");
+  const statusText = document.getElementById("status");
+
+  const jubbLayer = document.getElementById("jubbLayer");
+  const jubbs = [...document.querySelectorAll(".jubb")];
+
+  const personBox = document.getElementById("personBox");
+
+  let model = null;
+  let detecting = false;
+
+  // เก็บตำแหน่งล่าสุด เพื่อทำให้ข้อความไม่กระตุกมาก
+  let smoothBox = null;
+
+  function resizeCanvas() {
+    overlay.width = window.innerWidth;
+    overlay.height = window.innerHeight;
+  }
+
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+  async function openCamera() {
+    try {
+
+      statusText.textContent = "กำลังเปิดกล้อง...";
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+
+      video.srcObject = stream;
+
+      await new Promise(resolve => {
+        video.onloadedmetadata = () => resolve();
+      });
+
+      await video.play();
+
+      startButton.style.display = "none";
+
+      statusText.textContent = "กำลังโหลด AI ตรวจจับคน...";
+
+      // โหลดโมเดล
+      model = await cocoSsd.load({
+        base: "lite_mobilenet_v2"
+      });
+
+      statusText.textContent = "พร้อมแล้ว • กำลังค้นหาคน";
+
+      detecting = true;
+      detectLoop();
+
+    } catch (error) {
+      console.error(error);
+
+      statusText.textContent =
+        "เปิดกล้องไม่สำเร็จ กรุณาอนุญาตสิทธิ์กล้อง";
+
+      startButton.style.display = "block";
+    }
+  }
+
+  // แปลงตำแหน่งจาก video coordinate
+  // ไปเป็นตำแหน่งจริงบนหน้าจอเมื่อ object-fit: cover
+  function mapVideoBoxToScreen(box) {
+
+    const videoWidth = video.videoWidth;
+    const videoHeight = video.videoHeight;
+
+    const screenWidth = window.innerWidth;
+    const screenHeight = window.innerHeight;
+
+    if (!videoWidth || !videoHeight) return null;
+
+    const videoAspect = videoWidth / videoHeight;
+    const screenAspect = screenWidth / screenHeight;
+
+    let scale;
+    let renderedWidth;
+    let renderedHeight;
+    let offsetX;
+    let offsetY;
+
+    if (screenAspect > videoAspect) {
+      scale = screenWidth / videoWidth;
+
+      renderedWidth = screenWidth;
+      renderedHeight = videoHeight * scale;
+
+      offsetX = 0;
+      offsetY = (screenHeight - renderedHeight) / 2;
+    } else {
+      scale = screenHeight / videoHeight;
+
+      renderedWidth = videoWidth * scale;
+      renderedHeight = screenHeight;
+
+      offsetX = (screenWidth - renderedWidth) / 2;
+      offsetY = 0;
+    }
+
+    return {
+      x: box[0] * scale + offsetX,
+      y: box[1] * scale + offsetY,
+      w: box[2] * scale,
+      h: box[3] * scale
+    };
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function smoothPosition(target) {
+
+    if (!smoothBox) {
+      smoothBox = { ...target };
+      return smoothBox;
+    }
+
+    const speed = 0.28;
+
+    smoothBox.x = lerp(smoothBox.x, target.x, speed);
+    smoothBox.y = lerp(smoothBox.y, target.y, speed);
+    smoothBox.w = lerp(smoothBox.w, target.w, speed);
+    smoothBox.h = lerp(smoothBox.h, target.h, speed);
+
+    return smoothBox;
+  }
+
+  function hideJubbs() {
+    jubbLayer.style.display = "none";
+    personBox.style.display = "none";
+  }
+
+  function showJubbs(box) {
+
+    const b = smoothPosition(box);
+
+    jubbLayer.style.display = "block";
+    personBox.style.display = "block";
+
+    // กรอบคน
+    personBox.style.left = `${b.x}px`;
+    personBox.style.top = `${b.y}px`;
+    personBox.style.width = `${b.w}px`;
+    personBox.style.height = `${b.h}px`;
+
+    /*
+      วาง Jubb 5 จุดรอบตัวคน
+      ใช้ตำแหน่งสัมพันธ์กับ bounding box
+    */
+    const positions = [
+      // ซ้ายบน
+      {
+        x: b.x + b.w * 0.12,
+        y: b.y + b.h * 0.18
+      },
+
+      // ขวาบน
+      {
+        x: b.x + b.w * 0.88,
+        y: b.y + b.h * 0.22
+      },
+
+      // กลาง
+      {
+        x: b.x + b.w * 0.50,
+        y: b.y + b.h * 0.47
+      },
+
+      // ซ้ายล่าง
+      {
+        x: b.x + b.w * 0.16,
+        y: b.y + b.h * 0.75
+      },
+
+      // ขวาล่าง
+      {
+        x: b.x + b.w * 0.84,
+        y: b.y + b.h * 0.72
+      }
+    ];
+
+    jubbs.forEach((jubb, index) => {
+      jubb.style.left = `${positions[index].x}px`;
+      jubb.style.top = `${positions[index].y}px`;
+    });
+  }
+
+  async function detectLoop() {
+
+    if (!detecting || !model) return;
+
+    try {
+
+      const predictions = await model.detect(video);
+
+      const persons = predictions.filter(item =>
+        item.class === "person" &&
+        item.score >= 0.55
+      );
+
+      if (persons.length > 0) {
+
+        // เลือกคนที่ใหญ่ที่สุดในภาพ
+        const biggestPerson = persons.sort((a, b) => {
+          const areaA = a.bbox[2] * a.bbox[3];
+          const areaB = b.bbox[2] * b.bbox[3];
+
+          return areaB - areaA;
+        })[0];
+
+        const screenBox = mapVideoBoxToScreen(biggestPerson.bbox);
+
+        if (screenBox) {
+          showJubbs(screenBox);
+
+          const confidence = Math.round(biggestPerson.score * 100);
+
+          statusText.textContent =
+            `พบคนแล้ว ✓ ${confidence}%`;
+        }
+
+      } else {
+
+        smoothBox = null;
+
+        hideJubbs();
+
+        statusText.textContent = "กำลังค้นหาคน...";
+      }
+
+    } catch (error) {
+      console.error("Detection error:", error);
+    }
+
+    // จำกัดความถี่เพื่อให้มือถือไม่หนักเกินไป
+    setTimeout(() => {
+      requestAnimationFrame(detectLoop);
+    }, 80);
+  }
+
+  startButton.addEventListener("click", openCamera);
+
+})();
+</script>
+
+</body>
+</html>
